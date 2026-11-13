@@ -208,12 +208,12 @@ it('still reports a warning, not a failure, when only the local archive cannot b
     fakeUploadDisks();
     fakeRemoteProcesses([
         '*du -b*' => '128',
+        '*docker rm -f*' => '',
         "*rm -f '*" => Process::result(errorOutput: 'rm: cannot remove: permission denied', exitCode: 1),
         '*' => '',
     ]);
 
     (new VolumeBackupJob($backup))->handle();
-
     $execution = ScheduledVolumeBackupExecution::query()->sole();
     expect($execution->message)->toContain('local archive could not be deleted')
         ->and($execution->status)->toBe('success')
