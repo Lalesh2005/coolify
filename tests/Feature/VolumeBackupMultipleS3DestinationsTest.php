@@ -162,7 +162,7 @@ it('signs each upload with the region of its destination', function () {
     expect($regionOfBucket)->toBe(['first-bucket' => 'ru-central-1', 'second-bucket' => 'us-east-1']);
 });
 
-it('keeps the local archive and cleans the partial upload when one destination fails', function () {
+it('fails the run, keeps the local archive and cleans the partial upload when one destination fails', function () {
     [$backup, $first, $second] = createMultiDestinationVolumeBackup(['disable_local_backup' => true]);
     fakeMultiDestinationS3Disks();
     fakeRemoteProcesses([
@@ -177,7 +177,7 @@ it('keeps the local archive and cleans the partial upload when one destination f
     $firstReplica = $execution->s3Replicas()->where('s3_storage_id', $first->id)->sole();
     $secondReplica = $execution->s3Replicas()->where('s3_storage_id', $second->id)->sole();
     Process::assertNotRan(fn ($process) => preg_match("/rm -f '[^']+\\.tar\\.gz'/", remoteProcessScript($process)) === 1);
-    expect($execution->status)->toBe('success')
+    expect($execution->status)->toBe('failed')
         ->and($execution->message)->toContain('Storage upload failed: second storage:')
         ->and($execution->s3_uploaded)->toBeFalse()
         ->and($execution->s3_cleanup_pending)->toBeFalse()

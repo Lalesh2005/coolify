@@ -25,7 +25,10 @@ class BackupFailed extends CustomEmailNotification implements ThrottledNotificat
 
     public ?string $url = null;
 
-    public function __construct(public ScheduledVolumeBackup $backup, public string $output)
+    /**
+     * @param  bool  $localBackupCreated  The archive was created, and a storage upload failed afterwards.
+     */
+    public function __construct(public ScheduledVolumeBackup $backup, public string $output, public bool $localBackupCreated = false)
     {
         $this->onQueue('high');
         $resource = $backup->targetResource();
@@ -53,7 +56,9 @@ class BackupFailed extends CustomEmailNotification implements ThrottledNotificat
 
     public function summary(): string
     {
-        return "Storage backup of {$this->target} ({$this->resourceName}) has FAILED.";
+        $summary = "Storage backup of {$this->target} ({$this->resourceName}) has FAILED.";
+
+        return $this->localBackupCreated ? $summary.' Remote storage upload unsuccessful.' : $summary;
     }
 
     public function toMail(): MailMessage
@@ -81,6 +86,11 @@ class BackupFailed extends CustomEmailNotification implements ThrottledNotificat
         );
 
         $message->addField('Frequency', $this->frequency, true);
+        if ($this->localBackupCreated) {
+            $message->addField('Local backup', 'Created', true);
+            $message->addField('Remote storage upload', 'Failed', true);
+            $message->addField('Overall status', 'Failed', true);
+        }
         $message->addField('Output', $this->output);
         if ($this->url) {
             $message->addField('Resource', '[Link]('.$this->url.')');
@@ -130,6 +140,6 @@ class BackupFailed extends CustomEmailNotification implements ThrottledNotificat
             'frequency' => $this->frequency,
             'error_output' => $this->output,
             'url' => $this->url,
-        ];
+        ] + ($this->localBackupCreated ? ['local_backup_created' => true, 'remote_upload_succeeded' => false] : []);
     }
 }

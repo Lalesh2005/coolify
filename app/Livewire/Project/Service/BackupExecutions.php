@@ -212,7 +212,8 @@ class BackupExecutions extends Component
                 'size' => $execution->size,
                 'message' => $execution->message,
                 'filename' => $execution->filename,
-                'download_url' => $execution->status === 'success' && $execution->isDownloadable()
+                // A volume backup that failed only at its storage upload keeps a complete local archive.
+                'download_url' => ($execution->status === 'success' || (! $isDatabase && $execution->status === 'failed' && (int) $execution->size > 0)) && $execution->isDownloadable()
                     ? route($isDatabase ? 'download.backup' : 'download.volume-backup', $execution->id)
                     : null,
             ];

@@ -166,6 +166,7 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
             }
 
             $warning = null;
+            $uploadFailed = false;
             $s3Uploaded = false;
             $s3CleanupPending = false;
             $localStorageDeleted = $streamToS3;
@@ -177,6 +178,7 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
                 $this->execution->update(['s3_cleanup_pending' => false]);
             } elseif ($this->backup->save_s3 && $destinations->isEmpty()) {
                 $warning = 'Storage upload failed: The selected backup storage no longer exists.';
+                $uploadFailed = true;
             } elseif ($this->backup->save_s3) {
                 $s3CleanupPending = true;
                 $this->execution->update(['s3_cleanup_pending' => true]);
@@ -186,6 +188,7 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
                 if ($s3Uploaded) {
                     $s3CleanupPending = false;
                 } else {
+                    $uploadFailed = true;
                     $warning = 'Storage upload failed: '.implode(' ', $uploadErrors);
 
                     try {
@@ -208,8 +211,10 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
             }
 
             $warning = $warning === null ? null : $this->redact($warning);
+            // A required storage upload that failed makes the whole run fail, also when the local archive was created.
+            // The archive stays (see removeExpiredBackups) so the run does not lose the only copy of the data.
             $this->execution->update([
-                'status' => 'success',
+                'status' => $uploadFailed ? 'failed' : 'success',
                 'message' => $warning,
                 'size' => $size,
                 'filename' => $backupLocation,
@@ -272,6 +277,12 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
 
             $this->execution->update(['finished_at' => now()]);
             BackupCreated::dispatch($team->id);
+        }
+
+        if ($uploadFailed) {
+            $team->notify(new BackupFailed($this->backup, $warning, localBackupCreated: true));
+
+            return;
         }
 
         $team->notify(new BackupSuccess($this->backup, $warning));
@@ -599,7 +610,7 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
             $this->backup->retention_max_storage_locally,
         )) {
             $localExecutions = $this->backup->executions()
-                ->where('status', 'success')
+                ->where(fn ($query) => $this->withCompleteArchive($query))
                 ->where('local_storage_deleted', false)
                 ->get();
             $localExecutions = $this->executionsOutsideRetention(
@@ -625,7 +636,7 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
             $liveCopies = fn ($query) => $query->where('s3_uploaded', true)->where('s3_storage_deleted', false);
             $s3Executions = $this->backup->executions()
                 ->with(['s3Replicas' => fn ($query) => $liveCopies($query)->with('s3')])
-                ->where('status', 'success')
+                ->where(fn ($query) => $this->withCompleteArchive($query))
                 ->whereHas('s3Replicas', $liveCopies)
                 ->get();
 
@@ -665,6 +676,17 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
             ->where('s3_cleanup_pending', false)
             ->withoutLiveS3Copies()
             ->delete();
+    }
+
+    /**
+     * Executions whose archive was created completely: successful runs, and runs that failed only because a storage
+     * upload failed. The latter set a size and keep their archive and uploaded copies, which retention must still remove.
+     * Runs that failed while archiving never set a size.
+     */
+    private function withCompleteArchive($query)
+    {
+        return $query->where('status', 'success')
+            ->orWhere(fn ($failed) => $failed->where('status', 'failed')->where('size', '>', 0));
     }
 
     private function hasRetentionLimits(int $amount, int $days, float $maxStorageGb): bool
